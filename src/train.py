@@ -36,6 +36,9 @@ parser.add_argument('--attn_gate', action='store_true', help='add learnable sigm
 parser.add_argument('--value_emb', action='store_true', help='add separate value embedding')
 parser.add_argument('--fixed_steps', type=int, default=0,
                     help='fixed training steps per epoch for scaling study')
+parser.add_argument('--position_split', type=str, default='train',
+                    choices=['train', 'valid'],
+                    help='data split for position-dependent loss analysis (requirement: train)')
 parser.add_argument('--tag', type=str, default='default', help='experiment tag for output files')
 parser.add_argument('--results_dir', type=str, default='../results',
                     help='directory for results output (e.g., ../results/part_b)')
@@ -113,9 +116,16 @@ def evaluate():
     print(f"  Valid loss: {avg_loss:.4f}, perplexity: {ppl:.2f}")
     return ppl, avg_loss
 
-def evaluate_by_position(group_size=32):
-    """Compute average loss for tokens grouped by position in the context window."""
-    data_loader.set_valid()
+def evaluate_by_position(group_size=32, split='train'):
+    """Compute average training loss grouped by token position in the context window.
+
+    Uses the training split by default to match the requirement (§3.1 Study 2).
+    Pass split='valid' to use the validation set instead.
+    """
+    if split == 'train':
+        data_loader.set_train()
+    else:
+        data_loader.set_valid()
     lm.eval()
     max_len = args.max_sql
     pos_loss_sum = torch.zeros(max_len)
@@ -204,11 +214,11 @@ for epoch in range(1, args.epochs + 1):
     scheduler.step()
 
 print(f"Training complete. Best valid PPL: {best_valid_ppl:.2f} @ epoch {best_epoch}")
-print("\nAnalyzing loss by position group...")
+print(f"\nAnalyzing loss by position group (split={args.position_split})...")
 lm.load_state_dict(torch.load(os.path.join(CKPT_DIR, f"best_model_{args.tag}.pt"),
                               map_location=device))
-pos_groups = evaluate_by_position(group_size=32)
-print(f"Position groups (loss per group):")
+pos_groups = evaluate_by_position(group_size=32, split=args.position_split)
+print(f"Position groups ({args.position_split} loss per group):")
 for label, avg_loss in pos_groups:
     print(f"pos {label:>10s}: {avg_loss:.4f}")
 
@@ -230,6 +240,7 @@ results = {
     'best_valid_ppl': best_valid_ppl,
     'best_epoch': best_epoch,
     'position_groups': [{'range': label, 'loss': avg_loss} for label, avg_loss in pos_groups],
+    'position_split': args.position_split,
 }
 
 with open(os.path.join(RESULT_DIR, f"results_{args.tag}.json"), 'w') as f:

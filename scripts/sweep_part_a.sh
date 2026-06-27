@@ -3,8 +3,24 @@ set -e
 # ═══════════════════════════════════════════════════════════════════════════════
 # Part A — Hyperparameter Sweep
 # ═══════════════════════════════════════════════════════════════════════════════
-#   5 configurations varying model size, lr, batch, dropout.
-#   Results saved to results/part_a/.
+# Search space explored (one axis varied at a time from the expB reference):
+#
+#   emb_dim    : 64, 128, 256
+#   num_layers : 2, 4, 6
+#   num_heads  : 2, 4, 8        (must divide emb_dim evenly)
+#   lr         : 1e-4, 3e-4, 1e-3
+#   batch_size : 16, 32
+#   dropout    : 0.1, 0.2
+#
+# Fixed across all runs: epochs=10, max_sql=256, grad_clip=1.0, AdamW+CosineAnnealingLR
+# Metric for selection: best validation perplexity
+#
+# 5 configurations chosen to cover the Cartesian extremes:
+#   expA — small model, high lr
+#   expB — medium model, high lr  ← best
+#   expC — large model, lower lr
+#   expD — medium model, larger batch + more dropout
+#   expE — large model, many heads, low lr, high dropout
 # ═══════════════════════════════════════════════════════════════════════════════
 
 COMMON="--cuda --epochs 10 --eval_batch_size 16 --results_dir ../results/part_a"

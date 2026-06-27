@@ -146,6 +146,7 @@ def generate_samples():
 all_step_losses = []
 train_loss, valid_ppl, valid_loss = [], [], []
 best_ppl = float('inf')
+best_epoch = 1
 for epoch in range(1, args.epochs + 1):
     print(f"\n{'='*50}")
     print(f"Epoch {epoch}/{args.epochs}  (lr: {scheduler.get_last_lr()[0]:.2e})")
@@ -161,18 +162,20 @@ for epoch in range(1, args.epochs + 1):
 
     if v_ppl < best_ppl:
         best_ppl = v_ppl
+        best_epoch = epoch
         torch.save(model.state_dict(), os.path.join(CKPT_DIR, f"best_llada_{args.tag}.pt"))
         print(f"  Best (ppl={best_ppl:.2f}) @ epoch {epoch}")
 
     scheduler.step()
 
-print(f"\nLLaDA best pseudo-ppl: {best_ppl:.2f}")
+print(f"\nLLaDA best pseudo-ppl: {best_ppl:.2f} @ epoch {best_epoch}")
 model.load_state_dict(
     torch.load(os.path.join(CKPT_DIR, f"best_llada_{args.tag}.pt"),
     map_location=device)
 )
 print("\nGenerating samples (LLaDA 128-step decoding)...")
-for i, s in enumerate(generate_samples()):
+samples = generate_samples()
+for i, s in enumerate(samples):
     print(f"\n Sample {i + 1}: {s[:200]}...")
 
 results = {
@@ -189,6 +192,8 @@ results = {
     'valid_epoch_ppl': valid_ppl,
     'valid_epoch_loss': valid_loss,
     'best_valid_ppl': best_ppl,
+    'best_epoch': best_epoch,
+    'samples': samples,
 }
 with open(os.path.join(RESULT_DIR, f"results_{args.tag}.json"), 'w') as f:
     json.dump(results, f, indent=2)
