@@ -23,19 +23,13 @@ run_llada() {
     python3 "$SRC_DIR/train_llada.py" $COMMON --tag "$tag" "$@"
 }
 
-# ─── Model size grid ─────────────────────────────────────────────────────────
-#  dim  layers  heads  lr
-#  64   2       2      1e-3
-#  128  4       4      1e-3
-#  192  6       4      3e-4
-
 while read -r dim layers heads lr; do
 
     SIZE_ARGS="--emb_dim $dim --num_layers $layers --num_heads $heads --lr $lr"
     suffix="d${dim}"
 
-    # (a) Basic masked diffusion
-    run_diff "diffusion_${suffix}" $SIZE_ARGS
+    # (a) MDLM
+    run_diff "masked_diffusion_${suffix}" $SIZE_ARGS
 
     # (b) LLaDA
     run_llada "llada_${suffix}" $SIZE_ARGS

@@ -1,4 +1,3 @@
-# coding: utf-8
 import argparse
 import json
 import math
@@ -38,10 +37,10 @@ parser.add_argument('--fixed_steps', type=int, default=0,
                     help='fixed training steps per epoch for scaling study')
 parser.add_argument('--position_split', type=str, default='train',
                     choices=['train', 'valid'],
-                    help='data split for position-dependent loss analysis (requirement: train)')
+                    help='data split for position-dependent loss analysis')
 parser.add_argument('--tag', type=str, default='default', help='experiment tag for output files')
 parser.add_argument('--results_dir', type=str, default='../results',
-                    help='directory for results output (e.g., ../results/part_b)')
+                    help='directory for results output')
 
 args = parser.parse_args()
 
@@ -85,8 +84,9 @@ lm = model.CausalLMM(
 )
 lm = lm.to(device)
 total_params = sum(p.numel() for p in lm.parameters())
-non_emb_params = lm.num_non_embedding_params()
-print(f"Model params: {total_params:,} (non-emb: {non_emb_params:,})")
+architecture_params = lm.num_architecture_params()
+print(f"Model params: {total_params:,} "
+      f"(excluding shared input embedding: {architecture_params:,})")
 
 optimizer = optim.AdamW(lm.parameters(), lr=args.lr, weight_decay=0.01)
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
@@ -117,11 +117,7 @@ def evaluate():
     return ppl, avg_loss
 
 def evaluate_by_position(group_size=32, split='train'):
-    """Compute average training loss grouped by token position in the context window.
-
-    Uses the training split by default to match the requirement (§3.1 Study 2).
-    Pass split='valid' to use the validation set instead.
-    """
+    """Average loss per token-position group. Uses train split by default (§3.1 Study 2)."""
     if split == 'train':
         data_loader.set_train()
     else:
@@ -135,9 +131,8 @@ def evaluate_by_position(group_size=32, split='train'):
             data, target, end_flag = data_loader.get_batch()
             data = data.to(device)
             target = target.to(device)
-            logits = lm(data)  # (seq_len, B, vocab_size)
+            logits = lm(data)
             seq_len = logits.size(0)
-            # per-token loss, reshaped to (seq_len, B)
             loss_per_token = F.cross_entropy(
                 logits.view(-1, logits.size(-1)), target, reduction='none'
             ).view(seq_len, -1)
@@ -229,9 +224,11 @@ results = {
         'num_heads': args.num_heads, 'lr': args.lr, 'dropout': args.dropout,
         'batch_size': args.train_batch_size, 'max_sql': args.max_sql,
         'epochs': args.epochs, 'grad_clip': args.grad_clip,
+        'seed': args.seed,
         'arch': arch_name,
         'total_params': total_params,
-        'non_embedding_params': non_emb_params,
+        'architecture_params_excluding_input_embedding': architecture_params,
+        'non_embedding_params': architecture_params,
     },
     'train_epoch_ppl': train_epoch_ppl,
     'train_epoch_loss': train_epoch_loss,

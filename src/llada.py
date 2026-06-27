@@ -1,11 +1,6 @@
-"""LLaDA: Large Language Diffusion Models (Nie et al., 2025).
+"""LLaDA: Large Language Diffusion Models (Nie et al., NeurIPS 2025).
 
-Masked absorbing-state discrete diffusion on text tokens.
-- Forward: tokens transition to [MASK] according to a linear schedule.
-- Reverse: bidirectional Transformer predicts p(x_0 | x_t).
-- Sampling: iterative decoding with confidence-based remasking.
-
-Reference: https://github.com/ML-GSAI/LLaDA
+Differences from MDLM: 1/t-weighted CE loss, cosine decoding schedule, 128-step remasking.
 """
 
 import math
@@ -18,13 +13,11 @@ from diffusion_lm import BidirectionalBlock
 
 
 class LLaDA(nn.Module):
-    """Masked diffusion language model following LLaDA (Nie et al., 2025)."""
-
     def __init__(self, vocab_size, dim=256, num_layers=4, num_heads=8,
                  max_seq_len=256, ffn_hidden_dim=None, dropout=0.1):
         super().__init__()
-        self.vocab_size = vocab_size   # includes [MASK] at last index
-        self.mask_id = vocab_size - 1
+        self.vocab_size = vocab_size
+        self.mask_id = vocab_size - 1  # [MASK] at last index
         self.dim = dim
 
         self.embedding = nn.Embedding(vocab_size, dim)
@@ -51,16 +44,11 @@ class LLaDA(nn.Module):
         x = self.drop(self.embedding(input_ids))
         for layer in self.layers:
             x = layer(x)
-        return self.head(self.norm(x))  # (seq_len, B, vocab_size)
+        return self.head(self.norm(x))
 
     def diffuse(self, x0):
-        """Mask tokens at random ratio t ~ U(0, 1) per sequence.
-
-        Returns (x_t, mask, t) where mask indicates which positions
-        were replaced with [MASK] and t is the per-sequence ratio.
-        """
+        """Mask tokens at random ratio t ~ U(0, 1) per sequence."""
         B = x0.size(1)
-        # LLaDA samples t uniformly from [eps, 1) to avoid t=0
         t = torch.rand(B, device=x0.device) * 0.999 + 0.001
         mask = torch.rand_like(x0, dtype=torch.float, device=x0.device) < t.unsqueeze(0)
         xt = x0.clone()
@@ -68,15 +56,12 @@ class LLaDA(nn.Module):
         return xt, mask, t
 
     def training_loss(self, x0):
-        """Compute weighted diffusion loss on a batch.
-        [MASK] token is excluded from prediction targets.
-        """
+        """1/t-weighted CE loss on masked positions only (LLaDA §3.1)."""
         xt, mask, t = self.diffuse(x0)
-        logits = self.forward(xt)  # (seq_len, B, vocab)
+        logits = self.forward(xt)
         logits = logits.clone()
         logits[:, :, self.mask_id] = -float('inf')
 
-        vocab_eff = self.vocab_size - 1
         loss_per_token = F.cross_entropy(
             logits.view(-1, self.vocab_size),
             x0.view(-1),
@@ -86,16 +71,11 @@ class LLaDA(nn.Module):
 
         weight = 1.0 / t.unsqueeze(0).clamp(min=0.05)
         weighted_loss = (loss_per_token * mask.float() * weight).sum()
-        n_masked = mask.sum().clamp(min=1)
-        return weighted_loss / n_masked
+        return weighted_loss / mask.sum().clamp(min=1)
 
     @torch.no_grad()
     def eval_loss(self, x0, num_masks=5):
-        """
-        Compute unweighted pseudo-ppl by averaging over several mask ratios.
-        Uses fixed mask ratios {0.1, 0.3, 0.5, 0.7, 0.9} for stable evaluation,
-        without the 1/t weight factor.
-        """
+        """Unweighted pseudo-loss averaged over fixed mask ratios {0.1, 0.3, 0.5, 0.7, 0.9}."""
         ratios = torch.linspace(0.1, 0.9, num_masks, device=x0.device)
         total_loss = 0.0
         total_masked = 0
@@ -124,14 +104,7 @@ class LLaDA(nn.Module):
     @torch.no_grad()
     def generate(self, seq_len, batch_size=1, steps=128, temperature=1.0,
                  remask_low_conf=True, device='cpu'):
-        """
-        LLaDA-style iterative decoding with remasking.
-        Algorithm (per generation step):
-          1. Predict p(x0 | xt) for all masked positions.
-          2. Determine how many tokens n_k to keep this step from the schedule.
-          3. Select n_k most confident predictions and unmask them.
-          4. Optionally remask the least confident unmasked tokens.
-        """
+        """Cosine-scheduled iterative decoding with optional low-confidence remasking."""
         tokens = torch.full((seq_len, batch_size), self.mask_id,
                             dtype=torch.long, device=device)
         unmasked = torch.zeros(seq_len, batch_size, dtype=torch.bool, device=device)
@@ -143,12 +116,11 @@ class LLaDA(nn.Module):
 
             logits = self.forward(tokens) / temperature
             probs = F.softmax(logits, dim=-1)
-            conf, pred = probs.max(dim=-1)  # (seq_len, B)
+            conf, pred = probs.max(dim=-1)
             conf[unmasked] = -float('inf')
 
             flat_conf = conf.view(-1)
-            n_available = (~unmasked).sum().item()
-            n_pick = min(n_to_unmask, n_available)
+            n_pick = min(n_to_unmask, (~unmasked).sum().item())
             _, top_idx = torch.topk(flat_conf, n_pick)
 
             flat_probs = probs.view(-1, self.vocab_size)
@@ -157,8 +129,9 @@ class LLaDA(nn.Module):
             flat_tokens = tokens.view(-1)
             flat_tokens[top_idx] = sampled
             unmasked.view(-1)[top_idx] = True
+
             if remask_low_conf and s < steps * 0.9:
-                n_remask = int(n_to_unmask * 0.1)  # remask 10% as noise
+                n_remask = int(n_to_unmask * 0.1)
                 if n_remask > 0:
                     unmasked_flat = unmasked.view(-1)
                     unmasked_indices = unmasked_flat.nonzero(as_tuple=True)[0]

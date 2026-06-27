@@ -1,5 +1,5 @@
 {
-  "diffusion": {
+  "masked_diffusion": {
     "d64": {
       "n_samples": 5,
       "ttr_overall": 0.5188,
@@ -28,26 +28,26 @@
   "llada": {
     "d64": {
       "n_samples": 5,
-      "ttr_overall": 0.511,
-      "ttr_mean_per_doc": 0.6992,
-      "mean_length_tokens": 63.8,
-      "pairwise_bigram_overlap": 0.0163,
+      "ttr_overall": 0.5875,
+      "ttr_mean_per_doc": 0.7063,
+      "mean_length_tokens": 64.0,
+      "pairwise_bigram_overlap": 0.0024,
       "repetition_rate": 0.2
     },
     "d128": {
       "n_samples": 5,
-      "ttr_overall": 0.6125,
-      "ttr_mean_per_doc": 0.7594,
+      "ttr_overall": 0.5344,
+      "ttr_mean_per_doc": 0.6906,
       "mean_length_tokens": 64.0,
-      "pairwise_bigram_overlap": 0.0032,
-      "repetition_rate": 0.2
+      "pairwise_bigram_overlap": 0.0081,
+      "repetition_rate": 0.4
     },
     "d192": {
       "n_samples": 5,
-      "ttr_overall": 0.6625,
-      "ttr_mean_per_doc": 0.8187,
+      "ttr_overall": 0.6219,
+      "ttr_mean_per_doc": 0.7781,
       "mean_length_tokens": 64.0,
-      "pairwise_bigram_overlap": 0.004,
+      "pairwise_bigram_overlap": 0.0072,
       "repetition_rate": 0.0
     }
   }

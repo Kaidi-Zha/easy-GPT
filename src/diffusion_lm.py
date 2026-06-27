@@ -1,8 +1,8 @@
-"""Masked Absorbing-State Diffusion Language Model (LLaDA-style).
+"""MDLM: Masked absorbing-state diffusion LM (Sahoo et al., NeurIPS 2024).
 
-Forward process: randomly mask tokens at ratio t ~ Uniform(0, 1).
-Reverse process: predict original tokens from masked sequence (bidirectional).
-Sampling: iterative unmasking — start from all [MASK], gradually decode.
+Forward: mask tokens at ratio t ~ U(0, 1).
+Reverse: bidirectional Transformer predicts original tokens.
+Sampling: iterative unmasking with confidence-based greedy schedule (32 steps).
 """
 
 import math
@@ -13,8 +13,6 @@ import torch.nn.functional as F
 
 from model import precompute_freqs_cis, apply_rotary_emb, SwiGLUFFN
 
-
-# ─── Bidirectional Self-Attention (no causal mask) ───────────────────────────
 
 class BidirectionalAttention(nn.Module):
     def __init__(self, dim, num_heads, max_seq_len=256, dropout=0.1):
@@ -35,28 +33,22 @@ class BidirectionalAttention(nn.Module):
 
     def forward(self, x):
         seq_len, B, C = x.shape
-        x_t = x.transpose(0, 1)  # (B, seq_len, dim)
+        x_t = x.transpose(0, 1)
         q = self.wq(x_t).view(B, seq_len, self.num_heads, self.head_dim)
         k = self.wk(x_t).view(B, seq_len, self.num_heads, self.head_dim)
         v = self.wv(x_t).view(B, seq_len, self.num_heads, self.head_dim)
         q, k = apply_rotary_emb(q, k, self.freqs_cis)
 
-        q = q.transpose(1, 2)  # (B, H, T, head_dim)
+        q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
         scale = self.head_dim ** -0.5
         scores = torch.matmul(q, k.transpose(-2, -1)) * scale
-        # no causal mask → bidirectional
-        attn = torch.softmax(scores, dim=-1)
-        attn = self.attn_dropout(attn)
+        attn = self.attn_dropout(torch.softmax(scores, dim=-1))
         out = torch.matmul(attn, v)
         out = out.transpose(1, 2).contiguous().view(B, seq_len, C)
-        out = self.wo(out)
-        out = self.resid_dropout(out)
-        return out.transpose(0, 1)  # (seq_len, B, dim)
+        return self.resid_dropout(self.wo(out)).transpose(0, 1)
 
-
-# ─── Bidirectional Transformer Block ──────────────────────────────────────────
 
 class BidirectionalBlock(nn.Module):
     def __init__(self, dim, num_heads, max_seq_len=256, ffn_hidden_dim=None, dropout=0.1):
@@ -72,15 +64,13 @@ class BidirectionalBlock(nn.Module):
         return x
 
 
-# ─── Masked Diffusion Language Model ──────────────────────────────────────────
-
 class MaskedDiffusionLM(nn.Module):
     def __init__(self, vocab_size, dim=256, num_layers=4, num_heads=8,
                  max_seq_len=256, ffn_hidden_dim=None, dropout=0.1):
         super().__init__()
-        self.vocab_size = vocab_size  # includes [MASK] token at index vocab_size-1
+        self.vocab_size = vocab_size
         self.dim = dim
-        self.mask_id = vocab_size - 1
+        self.mask_id = vocab_size - 1  # [MASK] token is at last index
 
         self.embedding = nn.Embedding(vocab_size, dim)
         self.drop = nn.Dropout(dropout)
@@ -106,42 +96,32 @@ class MaskedDiffusionLM(nn.Module):
         x = self.drop(self.embedding(input_ids))
         for layer in self.layers:
             x = layer(x)
-        x = self.norm(x)
-        logits = self.head(x)  # (seq_len, B, vocab_size)
-        # Zero out [MASK] — model should never predict it
+        logits = self.head(self.norm(x))
         logits = logits.clone()
-        logits[:, :, self.mask_id] = -float('inf')
+        logits[:, :, self.mask_id] = -float('inf')  # never predict [MASK]
         return logits
 
     @torch.no_grad()
     def generate(self, seq_len, batch_size, steps=32, device='cpu', top_p=0.9):
-        """Iterative unmasking sampling.
-
-        Start from all-[MASK], at each step predict all masked positions,
-        keep the most confident ones, re-mask the rest.
-        """
+        """Iterative unmasking: start fully masked, unmask most-confident tokens each step."""
         tokens = torch.full((seq_len, batch_size), self.mask_id,
                             dtype=torch.long, device=device)
         mask = torch.ones(seq_len, batch_size, dtype=torch.bool, device=device)
 
         for step in range(steps):
-            # Number of tokens to unmask this step (linear schedule)
             n_unmask = int(seq_len * batch_size * (step + 1) / steps)
             n_currently_masked = mask.sum().item()
             n_to_unmask = max(1, n_unmask - (seq_len * batch_size - n_currently_masked))
 
-            logits = self.forward(tokens)  # (seq_len, B, vocab_size)
+            logits = self.forward(tokens)
             probs = F.softmax(logits, dim=-1)
 
-            # Confidence: max probability for each masked position
-            confidence = probs.max(dim=-1).values  # (seq_len, B)
-            confidence[~mask] = -float('inf')  # already unmasked → skip
+            confidence = probs.max(dim=-1).values
+            confidence[~mask] = -float('inf')
 
-            # Select top-k most confident masked positions
             flat_conf = confidence.view(-1)
             _, top_indices = torch.topk(flat_conf, min(n_to_unmask, n_currently_masked))
 
-            # Sample from predicted distribution at selected positions
             flat_probs = probs.view(-1, self.vocab_size)
             sampled = torch.multinomial(flat_probs[top_indices], 1).squeeze(-1)
 

@@ -11,15 +11,26 @@ checkpoints/
 best_lora/
 *.pt
 
-# Data files
+# Data / experiment outputs (too large for git)
 data/
+results/
+logs/
 
-# Logs and cache
+# Extra project folders
+Project2_easyGPT/
 plans/
 .cache/
 
-# pdf
+# Agent / AI assistant files
+AGENTS.md
+review.md
+CLAUDE.md
+bonus.md
+
+# Extra binary / document files
 *.pdf
+*.zip
+*.tar.gz
 
 # OS / sync artifacts
 *.sync-conflict-*

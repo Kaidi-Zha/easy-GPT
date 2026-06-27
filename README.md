@@ -145,7 +145,7 @@ and next-token prediction with masked-token prediction.
 
 | Model | Loss | Schedule | Steps |
 |---|---|---|---|
-| MaskedDiffusionLM | Cross-entropy (unweighted) | Linear | 32 |
+| MDLM | Cross-entropy (unweighted) | Linear | 32 |
 | LLaDA | 1/t-weighted cross-entropy | Cosine + remasking | 128 |
 
 Three sizes matched to Part B: `d64` (2L/2H), `d128` (4L/4H), `d192` (6L/4H).

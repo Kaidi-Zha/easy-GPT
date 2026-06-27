@@ -1,14 +1,3 @@
-"""Train a Masked Diffusion Language Model on PTB and compare against GPT baseline.
-
-The forward process randomly masks tokens at ratio t ~ Uniform(0, 1).
-Loss is cross-entropy on masked positions only (absorbing-state diffusion).
-Sampling uses iterative unmasking with a confidence-based schedule.
-
-Usage:
-    python train_diffusion.py --cuda --epochs 10
-    python train_diffusion.py --cuda --epochs 10 --tag my_run
-"""
-
 import argparse
 import json
 import math
@@ -63,21 +52,17 @@ print(f"Device: {device}")
 print(f"Config: layers={args.num_layers}, heads={args.num_heads}, dim={args.emb_dim}, "
       f"lr={args.lr}, batch={args.train_batch_size}, max_sql={args.max_sql}")
 
-# ─── Data ─────
-
 batch_size = {'train': args.train_batch_size, 'valid': args.eval_batch_size}
 data_loader = data.Corpus(
     os.path.join(SCRIPT_DIR, "..", "data", "ptb"), batch_size, args.max_sql)
 
-# Add [MASK] token to vocabulary
 orig_vocab_size = len(data_loader.vocabulary)
-vocab_size = orig_vocab_size + 1  # +1 for [MASK]
+vocab_size = orig_vocab_size + 1
 mask_id = orig_vocab_size
 data_loader.vocabulary.append('<mask>')
 data_loader.word_id['<mask>'] = mask_id
 print(f"Vocabulary: {orig_vocab_size:,} + [MASK] → {vocab_size:,}")
 
-# ─── Model ───
 model = MaskedDiffusionLM(
     vocab_size=vocab_size, dim=args.emb_dim, num_layers=args.num_layers,
     num_heads=args.num_heads, max_seq_len=args.max_sql, dropout=args.dropout,
@@ -88,24 +73,20 @@ print(f"Model params: {model.num_params():,}")
 optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
-# ─── Training helpers ───
 def forward_process(input_ids):
-    """Randomly mask tokens at ratio t ~ Uniform(0, 1). Returns (masked_ids, mask, targets)."""
+    """Randomly mask tokens at ratio t ~ U(0, 1). Returns (masked_ids, mask, targets)."""
     B = input_ids.size(1)
-    t = torch.rand(B, device=device)  # per-sequence mask ratio
+    t = torch.rand(B, device=device)
     mask = torch.rand_like(input_ids, dtype=torch.float, device=device) < t.unsqueeze(0)
-    # Never mask the [MASK] token itself (shouldn't appear in clean data anyway)
     masked_ids = input_ids.clone()
     masked_ids[mask] = mask_id
     targets = input_ids.clone()
-    targets[~mask] = -100  # ignore unmasked positions in loss
+    targets[~mask] = -100
     return masked_ids, mask, targets
 
 
-# ─── Evaluation ────
 @torch.no_grad()
 def evaluate_diffusion():
-    """Evaluate pseudo-perplexity at multiple mask ratios."""
     data_loader.set_valid()
     model.eval()
     total_loss = 0.0
@@ -116,9 +97,8 @@ def evaluate_diffusion():
         masked_ids, mask, targets = forward_process(input_ids)
         logits = model(masked_ids)
         loss = F.cross_entropy(logits.view(-1, vocab_size), targets.view(-1), ignore_index=-100)
-        n_masked = mask.sum().item()
-        total_loss += loss.item() * n_masked
-        total_masked += n_masked
+        total_loss += loss.item() * mask.sum().item()
+        total_masked += mask.sum().item()
         if end_flag:
             break
     avg_loss = total_loss / max(total_masked, 1)
@@ -126,7 +106,6 @@ def evaluate_diffusion():
     print(f"  Valid diffusion loss: {avg_loss:.4f}, pseudo-ppl: {ppl:.2f}")
     return ppl, avg_loss
 
-# ─── Training ───
 def train_epoch():
     data_loader.set_train()
     model.train()
@@ -154,10 +133,8 @@ def train_epoch():
     avg = sum(losses) / len(losses)
     return avg, losses
 
-# ─── Generation ───
 @torch.no_grad()
 def generate_samples(prompts, max_len=64):
-    """Generate from scratch (unconditional) or continue from a prompt."""
     model.eval()
     samples = []
     for _ in range(5):
@@ -212,6 +189,7 @@ results = {
         'num_heads': args.num_heads, 'lr': args.lr, 'dropout': args.dropout,
         'batch_size': args.train_batch_size, 'max_sql': args.max_sql,
         'epochs': args.epochs, 'gen_steps': args.gen_steps,
+        'seed': args.seed,
         'total_params': model.num_params(),
     },
     'train_epoch_loss': train_epoch_loss,
@@ -220,6 +198,11 @@ results = {
     'best_valid_ppl': best_valid_ppl,
     'best_epoch': best_epoch,
     'samples': samples,
+    'generation_config': {
+        'n_samples': 5, 'sequence_length': 64,
+        'steps': args.gen_steps, 'sampling': 'multinomial',
+        'schedule': 'linear', 'seed': args.seed,
+    },
 }
 with open(os.path.join(RESULT_DIR, f"results_{args.tag}.json"), 'w') as f:
     json.dump(results, f, indent=2)

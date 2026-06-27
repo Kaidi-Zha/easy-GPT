@@ -9,19 +9,14 @@ class Corpus(object):
         self.train = self.tokenize(os.path.join(path, 'train.txt'))
         self.valid = self.tokenize(os.path.join(path, 'valid.txt'))
         self.dset_flag = "train"
-
-        ## max_sql means the maximum sequence length
         self.max_sql = max_sql
         self.batch_size = batch_size
         print("size of train set: ", self.train.size(0))
         print("size of valid set: ", self.valid.size(0))
         self.train_batch_num = self.train.size(0) // self.batch_size["train"]
         self.valid_batch_num = self.valid.size(0) // self.batch_size["valid"]
-        # Truncate first blabla tokens for train set
         self.train = self.train.narrow(0, 0, self.batch_size["train"] * self.train_batch_num)
-        # Truncate first blabla tokens for valid set
         self.valid = self.valid.narrow(0, 0, self.batch_size["valid"] * self.valid_batch_num)
-        # train set and valid set of shape (B, m)
         self.train = self.train.view(self.batch_size["train"], -1).t().contiguous()
         self.valid = self.valid.view(self.batch_size["valid"], -1).t().contiguous()
 
@@ -36,7 +31,6 @@ class Corpus(object):
     def tokenize(self, file_name):
         file_lines = open(file_name, 'r').readlines()
         num_of_words = 0
-        # Extracting vocabulary
         for line in file_lines:
             words = line.split() + ['<eos>']
             num_of_words += len(words)
@@ -51,11 +45,9 @@ class Corpus(object):
             for word in words:
                 file_tokens[token_id] = self.word_id[word]
                 token_id += 1
-        # NLP data consist of a list of token id.
         return file_tokens
 
     def get_batch(self):
-        ## train_si and valid_si indicates the index of the start point of the current mini-batch
         if self.dset_flag == "train":
             start_index = self.train_si
             seq_len = min(self.max_sql, self.train.size(0) - self.train_si - 1)
@@ -66,11 +58,10 @@ class Corpus(object):
             seq_len = min(self.max_sql, self.valid.size(0) - self.valid_si - 1)
             data_loader = self.valid
             self.valid_si = self.valid_si + seq_len
-        # Load a truncation of word token ids
+
         data = data_loader[start_index:start_index + seq_len, :]
         target = data_loader[start_index + 1:start_index + seq_len + 1, :].view(-1)
 
-        ## end_flag indicates whether a epoch (train or valid epoch) has been ended
         if self.dset_flag == "train" and self.train_si + 1 == self.train.size(0):
             end_flag = True
             self.train_si = 0
@@ -80,7 +71,6 @@ class Corpus(object):
         else:
             end_flag = False
 
-        # Using data to generate target, each time generate the next word
         return data, target, end_flag
 
 

@@ -1,14 +1,3 @@
-"""Train a LLaDA-style masked diffusion model on PTB.
-
-LLaDA (Nie et al., 2025) uses:
-  - Weighted loss: L = -E_t [1/t * log p(x0 | xt) on masked positions]
-  - Cosine schedule for iterative decoding
-  - Optional remasking of low-confidence tokens during generation
-
-Usage:
-    python train_llada.py --cuda --epochs 10
-"""
-
 import argparse
 import json
 import math
@@ -61,8 +50,6 @@ torch.manual_seed(args.seed)
 device = torch.device(f'cuda:{args.gpu_id}' if args.cuda and torch.cuda.is_available() else 'cpu')
 print(f"Device: {device}")
 
-# ─── Data ────
-
 batch_size = {'train': args.train_batch_size, 'valid': args.eval_batch_size}
 data_loader = data.Corpus(
     os.path.join(SCRIPT_DIR, "..", "data", "ptb"), batch_size, args.max_sql)
@@ -74,8 +61,6 @@ data_loader.vocabulary.append('<mask>')
 data_loader.word_id['<mask>'] = mask_id
 print(f"Vocab: {orig_vocab_size:,} + [MASK] = {vocab_size:,}")
 
-# ─── Model ────
-
 model = LLaDA(vocab_size=vocab_size, dim=args.emb_dim, num_layers=args.num_layers,
               num_heads=args.num_heads, max_seq_len=args.max_sql, dropout=args.dropout)
 model = model.to(device)
@@ -83,10 +68,9 @@ print(f"Model params: {model.num_params():,}")
 optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
-# ─── Evaluation ───
 @torch.no_grad()
 def evaluate():
-    """Evaluate unweighted pseudo-ppl (averaged over fixed mask ratios)."""
+    """Unweighted pseudo-ppl averaged over fixed mask ratios."""
     data_loader.set_valid()
     model.eval()
     total_loss = 0.0
@@ -95,9 +79,8 @@ def evaluate():
         x0, _target, end_flag = data_loader.get_batch()
         x0 = x0.to(device)
         loss = model.eval_loss(x0)
-        n = x0.numel()
-        total_loss += loss * n
-        total_masked += n
+        total_loss += loss * x0.numel()
+        total_masked += x0.numel()
         if end_flag:
             break
     avg = total_loss / max(total_masked, 1)
@@ -105,7 +88,6 @@ def evaluate():
     print(f"  Valid loss: {avg:.4f}, pseudo-ppl: {ppl:.2f}")
     return ppl, avg
 
-# ─── Training ─────
 def train_epoch():
     data_loader.set_train()
     model.train()
@@ -127,7 +109,6 @@ def train_epoch():
             break
     return sum(losses) / len(losses), losses
 
-# ─── Generation ─────
 @torch.no_grad()
 def generate_samples():
     model.eval()
@@ -186,6 +167,7 @@ results = {
         'num_heads': args.num_heads, 'lr': args.lr, 'dropout': args.dropout,
         'batch_size': args.train_batch_size, 'max_sql': args.max_sql,
         'epochs': args.epochs, 'gen_steps': args.gen_steps,
+        'seed': args.seed,
         'total_params': model.num_params()
     },
     'train_epoch_loss': train_loss,
@@ -194,6 +176,12 @@ results = {
     'best_valid_ppl': best_ppl,
     'best_epoch': best_epoch,
     'samples': samples,
+    'generation_config': {
+        'n_samples': 5, 'sequence_length': 64,
+        'steps': args.gen_steps, 'temperature': args.gen_temp,
+        'schedule': 'cosine', 'low_confidence_remasking': True,
+        'seed': args.seed,
+    },
 }
 with open(os.path.join(RESULT_DIR, f"results_{args.tag}.json"), 'w') as f:
     json.dump(results, f, indent=2)
